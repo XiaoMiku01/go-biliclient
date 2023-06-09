@@ -1,22 +1,38 @@
 package client
 
 import (
+	"encoding/json"
+	"github.com/FishZe/go-libonebot/protocol"
 	notifyapi "github.com/XiaoMiku01/bilibili-grpc-api-go/bilibili/broadcast/message/im"
+	"github.com/XiaoMiku01/go-biliclient/onebot"
 	"github.com/XiaoMiku01/go-biliclient/utils"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
+	"strconv"
+	"sync"
 )
 
-func eventHandler(e *anypb.Any) {
-	//log.Println(e)
-	switch e.TypeUrl {
-	case "type.googleapis.com/bilibili.broadcast.v1.HeartbeatResp":
-		// 心跳包回复
+var (
+	// eventHandleFunc e.TypeUrl -> func(e *anypb.Any)
+	eventHandleFunc sync.Map
+)
+
+var (
+	BiliBot *onebot.BiliBot
+)
+
+func init() {
+	eventHandleFunc.Store("type.googleapis.com/bilibili.broadcast.message.im.NotifyRsp", notifyHandler)
+	eventHandleFunc.Store("type.googleapis.com/bilibili.broadcast.v1.HeartbeatResp", func(e *anypb.Any) {
 		log.Debugln("收到心跳包回复:", e)
-	case "type.googleapis.com/bilibili.broadcast.message.im.NotifyRsp":
-		// 通知回复
-		notifyHandler(e)
+	})
+}
+
+func eventHandler(e *anypb.Any) {
+	if f, ok := eventHandleFunc.Load(e.TypeUrl); ok {
+		f.(func(e *anypb.Any))(e)
+		return
 	}
 }
 
@@ -36,6 +52,12 @@ func notifyHandler(e *anypb.Any) {
 			session := GetOneClient().GetNewSession()
 			for _, v := range session.SessionList {
 				log.Infoln("收到:", v)
+				evt := protocol.NewMessageEventPrivate()
+				msg := make(map[string]string)
+				_ = json.Unmarshal([]byte(v.LastMsg.Content), &msg)
+				evt.Message = append(evt.Message, protocol.GetSegmentText(msg["content"]))
+				evt.UserId = strconv.FormatUint(v.LastMsg.SenderUid, 10)
+				BiliBot.SendEvent(evt)
 			}
 		default:
 			log.Debugln("收到未知通知回复:", utils.AnyToJSON(e))
